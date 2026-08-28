@@ -3,10 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="mobile-web-app-capable" content="yes">
-    <title>今天吃什么？</title>
+    <title>今天吃什么？- 实时同步版</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #f4f6f9; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 15px; }
@@ -28,7 +25,7 @@
         .result-box { margin-top: 15px; font-size: 1.25rem; font-weight: bold; color: #ef4444; min-height: 32px; text-align: center; }
         .tip { font-size: 12px; color: #64748b; text-align: center; }
 
-        /* 弹窗 Pop-up CSS 样式 */
+        /* Pop-up 样式 */
         .modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.6); display: flex; justify-content: center; align-items: center; z-index: 1000; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
         .modal-overlay.active { opacity: 1; pointer-events: auto; }
         .modal-card { background: #fff; padding: 30px; border-radius: 20px; width: 85%; max-width: 380px; text-align: center; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.2); transform: scale(0.8); transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
@@ -37,18 +34,21 @@
         .modal-title { font-size: 16px; color: #64748b; margin-bottom: 8px; }
         .modal-winner { font-size: 24px; font-weight: bold; color: #4f46e5; margin-bottom: 20px; word-break: break-all; }
         .btn-modal-close { background: #4f46e5; color: white; border: none; padding: 12px 0; border-radius: 10px; font-weight: bold; font-size: 16px; cursor: pointer; }
-        .btn-modal-close:hover { background: #4338ca; }
     </style>
+
+    <!-- 引入 Firebase 云端 SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
 </head>
 <body>
 
 <div class="container">
     <div class="left-panel">
         <h2>今天吃什么？</h2>
-        <textarea id="restaurantInput" placeholder="输入餐厅名字（支持换行或逗号分隔）..."></textarea>
-        <button class="btn-import" onclick="importRestaurants()">保存并更新转盘</button>
+        <textarea id="restaurantInput" placeholder="正在同步云端列表..."></textarea>
+        <button class="btn-import" id="saveBtn" onclick="saveToCloud()">保存并同步给全员</button>
         <button class="btn-spin" id="spinBtn" onclick="spinWheel()">🎲 开始抽取！</button>
-        <div class="tip">💡 提示：名单会自动保存在本机，断网也能用</div>
+        <div class="tip" id="statusTip">🔄 正在连接云端数据库...</div>
     </div>
 
     <div class="right-panel">
@@ -60,7 +60,6 @@
     </div>
 </div>
 
-<!-- 弹窗 Pop-up 结构 -->
 <div class="modal-overlay" id="resultModal">
     <div class="modal-card">
         <div class="modal-icon">🎉</div>
@@ -71,11 +70,20 @@
 </div>
 
 <script>
+    // 1. 初始化 Firebase 免费云端数据库 (此为演示用实时节点)
+    const firebaseConfig = {
+        databaseURL: "https://html-wheel-default-rtdb.asia-southeast1.firebasedatabase.app/"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const database = firebase.database();
+    const listRef = database.ref('shared_restaurant_list');
+
     const canvas = document.getElementById('wheelCanvas');
     const ctx = canvas.getContext('2d');
     const spinBtn = document.getElementById('spinBtn');
     const resultDiv = document.getElementById('result');
     const textarea = document.getElementById('restaurantInput');
+    const statusTip = document.getElementById('statusTip');
     const modal = document.getElementById('resultModal');
     const modalWinnerName = document.getElementById('modalWinnerName');
 
@@ -86,17 +94,49 @@
 
     const colors = ['#f87171', '#fb923c', '#fbbf24', '#a3e635', '#34d399', '#22d3ee', '#818cf8', '#c084fc'];
 
-    function initData() {
-        const savedData = localStorage.getItem('my_restaurant_list');
-        if (savedData) {
-            list = JSON.parse(savedData);
+    // 2. 监听云端实时数据更新：只要任何人修改了云端，所有人的网页会自动刷新转盘
+    listRef.on('value', (snapshot) => {
+        const data = snapshot.val();
+        if (data && Array.isArray(data) && data.length > 0) {
+            list = data;
         } else {
             list = defaultList;
         }
         textarea.value = list.join('\n');
+        statusTip.innerText = "🟢 已同步云端最新名单";
+        statusTip.style.color = "#10b981";
         drawWheel();
+    }, (error) => {
+        statusTip.innerText = "🔴 云端连接失败，切换为本地模式";
+        statusTip.style.color = "#ef4444";
+        list = defaultList;
+        textarea.value = list.join('\n');
+        drawWheel();
+    });
+
+    // 3. 将本地修改推送并同步保存到云端
+    function saveToCloud() {
+        if (isSpinning) return;
+        const rawText = textarea.value;
+        const items = rawText.split(/[\n,，]/).map(item => item.trim()).filter(item => item.length > 0);
+
+        if (items.length < 2) {
+            alert('请至少输入 2 家餐厅！');
+            return;
+        }
+
+        statusTip.innerText = "⏳ 正在保存到云端...";
+        statusTip.style.color = "#4f46e5";
+
+        // 推送到云端，这会触发所有开着页面的人的 on('value')
+        listRef.set(items).then(() => {
+            alert('同步成功！现在所有打开此网页的人都能看到新名单。');
+        }).catch((err) => {
+            alert('保存失败：' + err.message);
+        });
     }
 
+    // 画转盘
     function drawWheel() {
         const numSegments = list.length;
         if (numSegments === 0) {
@@ -135,24 +175,7 @@
         }
     }
 
-    function importRestaurants() {
-        if (isSpinning) return;
-        const rawText = textarea.value;
-        const items = rawText.split(/[\n,，]/).map(item => item.trim()).filter(item => item.length > 0);
-
-        if (items.length < 2) {
-            alert('请至少输入 2 家餐厅！');
-            return;
-        }
-
-        list = items;
-        localStorage.setItem('my_restaurant_list', JSON.stringify(list));
-        currentAngle = 0;
-        canvas.style.transform = `rotate(0deg)`;
-        resultDiv.innerText = '';
-        drawWheel();
-    }
-
+    // 抽取逻辑
     function spinWheel() {
         if (isSpinning || list.length === 0) return;
 
@@ -172,7 +195,6 @@
         canvas.style.transition = 'transform 4s cubic-bezier(0.15, 0.99, 0.35, 1)';
         canvas.style.transform = `rotate(${currentAngle}deg)`;
 
-        // 动画结束 4 秒后触发 Pop-up 弹窗
         setTimeout(() => {
             isSpinning = false;
             spinBtn.disabled = false;
@@ -182,7 +204,6 @@
         }, 4000);
     }
 
-    // 显示与关闭弹窗的函数
     function showModal(restaurantName) {
         modalWinnerName.innerText = restaurantName;
         modal.classList.add('active');
@@ -191,8 +212,6 @@
     function closeModal() {
         modal.classList.remove('active');
     }
-
-    initData();
 </script>
 </body>
 </html>
