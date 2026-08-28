@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>今天吃什么？</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #f4f6f9; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 15px; }
+        .container { background: #fff; padding: 25px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); width: 100%; max-width: 850px; display: flex; flex-wrap: wrap; gap: 25px; }
+        .left-panel { flex: 1; min-width: 280px; display: flex; flex-direction: column; gap: 12px; }
+        .right-panel { flex: 1; min-width: 280px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; }
+        h2 { color: #1e293b; font-size: 1.4rem; text-align: center; }
+        textarea { width: 100%; height: 160px; padding: 12px; border: 2px solid #e2e8f0; border-radius: 12px; resize: none; font-size: 14px; outline: none; }
+        textarea:focus { border-color: #4f46e5; }
+        button { width: 100%; padding: 12px; border: none; border-radius: 10px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size: 15px; }
+        .btn-import { background: #4f46e5; color: white; }
+        .btn-import:hover { background: #4338ca; }
+        .btn-spin { background: #10b981; color: white; font-size: 18px; padding: 14px; margin-top: 5px; }
+        .btn-spin:hover { background: #059669; }
+        .btn-spin:disabled { background: #9ca3af; cursor: not-allowed; }
+        .wheel-wrapper { position: relative; width: 300px; height: 300px; }
+        canvas { width: 100%; height: 100%; border-radius: 50%; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .pointer { position: absolute; top: -12px; left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 14px solid transparent; border-right: 14px solid transparent; border-top: 28px solid #ef4444; z-index: 10; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.2)); }
+        .result-box { margin-top: 15px; font-size: 1.25rem; font-weight: bold; color: #ef4444; min-height: 32px; text-align: center; }
+        .tip { font-size: 12px; color: #64748b; text-align: center; }
+
+        /* 弹窗 Pop-up CSS 样式 */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.6); display: flex; justify-content: center; align-items: center; z-index: 1000; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
+        .modal-overlay.active { opacity: 1; pointer-events: auto; }
+        .modal-card { background: #fff; padding: 30px; border-radius: 20px; width: 85%; max-width: 380px; text-align: center; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.2); transform: scale(0.8); transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        .modal-overlay.active .modal-card { transform: scale(1); }
+        .modal-icon { font-size: 48px; margin-bottom: 10px; }
+        .modal-title { font-size: 16px; color: #64748b; margin-bottom: 8px; }
+        .modal-winner { font-size: 24px; font-weight: bold; color: #4f46e5; margin-bottom: 20px; word-break: break-all; }
+        .btn-modal-close { background: #4f46e5; color: white; border: none; padding: 12px 0; border-radius: 10px; font-weight: bold; font-size: 16px; cursor: pointer; }
+        .btn-modal-close:hover { background: #4338ca; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="left-panel">
+        <h2>今天吃什么？</h2>
+        <textarea id="restaurantInput" placeholder="输入餐厅名字（支持换行或逗号分隔）..."></textarea>
+        <button class="btn-import" onclick="importRestaurants()">保存并更新转盘</button>
+        <button class="btn-spin" id="spinBtn" onclick="spinWheel()">🎲 开始抽取！</button>
+        <div class="tip">💡 提示：名单会自动保存在本机，断网也能用</div>
+    </div>
+
+    <div class="right-panel">
+        <div class="wheel-wrapper">
+            <div class="pointer"></div>
+            <canvas id="wheelCanvas" width="400" height="400"></canvas>
+        </div>
+        <div class="result-box" id="result"></div>
+    </div>
+</div>
+
+<!-- 弹窗 Pop-up 结构 -->
+<div class="modal-overlay" id="resultModal">
+    <div class="modal-card">
+        <div class="modal-icon">🎉</div>
+        <div class="modal-title">今天午餐就吃：</div>
+        <div class="modal-winner" id="modalWinnerName">餐厅名字</div>
+        <button class="btn-modal-close" onclick="closeModal()">决定了，出发！</button>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('wheelCanvas');
+    const ctx = canvas.getContext('2d');
+    const spinBtn = document.getElementById('spinBtn');
+    const resultDiv = document.getElementById('result');
+    const textarea = document.getElementById('restaurantInput');
+    const modal = document.getElementById('resultModal');
+    const modalWinnerName = document.getElementById('modalWinnerName');
+
+    const defaultList = ["Food Junction", "Koppi Roti", "华阳 Oriental Kopi", "OldTown White Coffee", "Ayam Penyet Express", "丸龟制面 Marugame Udon", "Stuff'd", "Sushi Zanmai"];
+    let list = [];
+    let isSpinning = false;
+    let currentAngle = 0;
+
+    const colors = ['#f87171', '#fb923c', '#fbbf24', '#a3e635', '#34d399', '#22d3ee', '#818cf8', '#c084fc'];
+
+    function initData() {
+        const savedData = localStorage.getItem('my_restaurant_list');
+        if (savedData) {
+            list = JSON.parse(savedData);
+        } else {
+            list = defaultList;
+        }
+        textarea.value = list.join('\n');
+        drawWheel();
+    }
+
+    function drawWheel() {
+        const numSegments = list.length;
+        if (numSegments === 0) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            return;
+        }
+
+        const arcSize = (2 * Math.PI) / numSegments;
+        const radius = canvas.width / 2;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        for (let i = 0; i < numSegments; i++) {
+            const angle = i * arcSize;
+            ctx.beginPath();
+            ctx.fillStyle = colors[i % colors.length];
+            ctx.moveTo(radius, radius);
+            ctx.arc(radius, radius, radius, angle, angle + arcSize);
+            ctx.fill();
+
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            ctx.save();
+            ctx.translate(radius, radius);
+            ctx.rotate(angle + arcSize / 2);
+            ctx.textAlign = "right";
+            ctx.fillStyle = "#ffffff";
+            ctx.font = "bold 16px sans-serif";
+            
+            let text = list[i];
+            if (text.length > 7) text = text.substring(0, 6) + '...';
+            
+            ctx.fillText(text, radius - 20, 6);
+            ctx.restore();
+        }
+    }
+
+    function importRestaurants() {
+        if (isSpinning) return;
+        const rawText = textarea.value;
+        const items = rawText.split(/[\n,，]/).map(item => item.trim()).filter(item => item.length > 0);
+
+        if (items.length < 2) {
+            alert('请至少输入 2 家餐厅！');
+            return;
+        }
+
+        list = items;
+        localStorage.setItem('my_restaurant_list', JSON.stringify(list));
+        currentAngle = 0;
+        canvas.style.transform = `rotate(0deg)`;
+        resultDiv.innerText = '';
+        drawWheel();
+    }
+
+    function spinWheel() {
+        if (isSpinning || list.length === 0) return;
+
+        isSpinning = true;
+        spinBtn.disabled = true;
+        resultDiv.innerText = '正在挑选...';
+
+        const selectedIndex = Math.floor(Math.random() * list.length);
+        const segmentAngle = 360 / list.length;
+        const randomTargetAngle = 360 - (selectedIndex * segmentAngle + segmentAngle / 2) - 90;
+        
+        const additionalRounds = 360 * 5; 
+        const nextAngle = currentAngle + additionalRounds + ((randomTargetAngle - (currentAngle % 360) + 360) % 360);
+
+        currentAngle = nextAngle;
+
+        canvas.style.transition = 'transform 4s cubic-bezier(0.15, 0.99, 0.35, 1)';
+        canvas.style.transform = `rotate(${currentAngle}deg)`;
+
+        // 动画结束 4 秒后触发 Pop-up 弹窗
+        setTimeout(() => {
+            isSpinning = false;
+            spinBtn.disabled = false;
+            const winner = list[selectedIndex];
+            resultDiv.innerText = `🎉 今天就吃：${winner}！`;
+            showModal(winner);
+        }, 4000);
+    }
+
+    // 显示与关闭弹窗的函数
+    function showModal(restaurantName) {
+        modalWinnerName.innerText = restaurantName;
+        modal.classList.add('active');
+    }
+
+    function closeModal() {
+        modal.classList.remove('active');
+    }
+
+    initData();
+</script>
+</body>
+</html>
