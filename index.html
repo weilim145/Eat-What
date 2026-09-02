@@ -70,12 +70,14 @@
 </div>
 
 <script>
-    // 1. 初始化 Firebase 免费云端数据库 (此为演示用实时节点)
+    // 1. 初始化你的专属 Firebase 云端数据库
     const firebaseConfig = {
-        databaseURL: "https://html-wheel-default-rtdb.asia-southeast1.firebasedatabase.app/"
+        databaseURL: "https://eat-what-519b3-default-rtdb.asia-southeast1.firebasedatabase.app"
     };
     firebase.initializeApp(firebaseConfig);
     const database = firebase.database();
+    
+    // 我们在这里创建了一个叫 'shared_restaurant_list' 的数据节点
     const listRef = database.ref('shared_restaurant_list');
 
     const canvas = document.getElementById('wheelCanvas');
@@ -107,7 +109,7 @@
         statusTip.style.color = "#10b981";
         drawWheel();
     }, (error) => {
-        statusTip.innerText = "🔴 云端连接失败，切换为本地模式";
+        statusTip.innerText = "🔴 云端连接失败，请检查数据库权限是否为 test mode";
         statusTip.style.color = "#ef4444";
         list = defaultList;
         textarea.value = list.join('\n');
@@ -132,7 +134,7 @@
         listRef.set(items).then(() => {
             alert('同步成功！现在所有打开此网页的人都能看到新名单。');
         }).catch((err) => {
-            alert('保存失败：' + err.message);
+            alert('保存失败，请确认 Firebase 规则设置为测试模式：' + err.message);
         });
     }
 
